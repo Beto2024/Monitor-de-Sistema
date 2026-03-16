@@ -34,6 +34,9 @@ let discoSelecionadoIdx = 0;
 let chartDiscoSelecionadoIdx = 0;
 // Cache da última lista de partições recebida
 let _particoesCache = [];
+// Flags de inicialização dos seletores de disco (para aplicar default C:\ apenas uma vez)
+let _diskSelectorInitialized      = false;
+let _chartDiskSelectorInitialized = false;
 
 // ============================================================
 // Inicialização — aguarda o DOM estar pronto
@@ -135,8 +138,7 @@ function atualizarDashboard(dados) {
 
   // Usa a partição selecionada pelo usuário para o gráfico de disco
   const disco = dados.disco || [];
-  const chartIdx = Math.min(chartDiscoSelecionadoIdx, Math.max(0, disco.length - 1));
-  adicionarPontoGrafico('disk', ts, disco[chartIdx]?.percentual ?? 0);
+  adicionarPontoGrafico('disk', ts, _percentualDisco(disco, chartDiscoSelecionadoIdx));
 }
 
 // ── CPU ───────────────────────────────────────────────────────
@@ -195,12 +197,34 @@ function atualizarRAM(ram) {
 // Armazena info de hardware de disco para enriquecer a lista de partições
 let _hardwareDiscos = [];
 
+/**
+ * Retorna o percentual de uso da partição `selIdx` no array `discoArr`.
+ * Faz o clamp do índice para evitar acesso fora dos limites.
+ */
+function _percentualDisco(discoArr, selIdx) {
+  if (!discoArr?.length) return 0;
+  const idx = Math.min(selIdx, discoArr.length - 1);
+  return discoArr[idx]?.percentual ?? 0;
+}
+
 /** Popula os seletores de partição (card + gráfico) se o número de partições mudou. */
 function _popularSeletoresPartição(particoes) {
   [
-    { id: 'disk-selector',       getIdx: () => discoSelecionadoIdx,       setIdx: (v) => { discoSelecionadoIdx = v; } },
-    { id: 'chart-disk-selector', getIdx: () => chartDiscoSelecionadoIdx,  setIdx: (v) => { chartDiscoSelecionadoIdx = v; } },
-  ].forEach(({ id, getIdx, setIdx }) => {
+    {
+      id: 'disk-selector',
+      getIdx: () => discoSelecionadoIdx,
+      setIdx: (v) => { discoSelecionadoIdx = v; },
+      isInit: () => _diskSelectorInitialized,
+      markInit: () => { _diskSelectorInitialized = true; },
+    },
+    {
+      id: 'chart-disk-selector',
+      getIdx: () => chartDiscoSelecionadoIdx,
+      setIdx: (v) => { chartDiscoSelecionadoIdx = v; },
+      isInit: () => _chartDiskSelectorInitialized,
+      markInit: () => { _chartDiskSelectorInitialized = true; },
+    },
+  ].forEach(({ id, getIdx, setIdx, isInit, markInit }) => {
     const sel = document.getElementById(id);
     if (!sel) return;
 
@@ -212,14 +236,16 @@ function _popularSeletoresPartição(particoes) {
       `<option value="${idx}">${escapeHtml(p.ponto_montagem)} (${escapeHtml(p.sistema_arquivos || 'N/A')})</option>`
     ).join('');
 
-    // Na primeira carga (prevIdx===0 e não há seleção manual), prefere C:\ ou /
     let targetIdx = prevIdx < particoes.length ? prevIdx : 0;
-    if (prevIdx === 0 && sel.options.length > 1) {
+
+    // Na primeira inicialização, prefere C:\ ou / como padrão
+    if (!isInit()) {
       const cIdx = particoes.findIndex(p =>
         p.ponto_montagem.toUpperCase().startsWith('C:') ||
         p.ponto_montagem === '/'
       );
       if (cIdx >= 0) targetIdx = cIdx;
+      markInit();
     }
 
     sel.value = targetIdx;
@@ -457,9 +483,7 @@ function reconstruirGraficos(historico) {
     });
     adicionarPontoGrafico('cpu',  ts, item.cpu?.total ?? 0);
     adicionarPontoGrafico('ram',  ts, item.ram?.percentual ?? 0);
-    const disco = item.disco || [];
-    const chartIdx = Math.min(chartDiscoSelecionadoIdx, Math.max(0, disco.length - 1));
-    adicionarPontoGrafico('disk', ts, disco[chartIdx]?.percentual ?? 0);
+    adicionarPontoGrafico('disk', ts, _percentualDisco(item.disco, chartDiscoSelecionadoIdx));
   });
 }
 
@@ -475,10 +499,8 @@ function _recalcularGraficoDisco() {
     const ts = new Date(item.timestamp).toLocaleTimeString('pt-BR', {
       hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
-    const disco = item.disco || [];
-    const chartIdx = Math.min(chartDiscoSelecionadoIdx, Math.max(0, disco.length - 1));
     chart.data.labels.push(ts);
-    chart.data.datasets[0].data.push(disco[chartIdx]?.percentual ?? 0);
+    chart.data.datasets[0].data.push(_percentualDisco(item.disco, chartDiscoSelecionadoIdx));
   });
 
   chart.update('none');
